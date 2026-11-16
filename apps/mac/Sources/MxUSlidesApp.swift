@@ -49,18 +49,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(
         _ sender: NSApplication, hasVisibleWindows flag: Bool
     ) -> Bool {
-        MainActor.assumeIsolated {
-            if let main = NSApp.windows.first(where: {
-                $0.identifier?.rawValue.hasPrefix("main") == true
-            }) {
-                if main.isMiniaturized { main.deminiaturize(nil) }
-                main.makeKeyAndOrderFront(nil)
-            } else {
-                WindowBridge.openMain?()
+        MainActor.assumeIsolated { Self.showMainWindow() }
+        return false
+    }
+
+    /// A relaunch can restore only the output windows; make sure the main window comes back too.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        for delay in [1.5, 4.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                MainActor.assumeIsolated {
+                    let main = NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true }
+                    if main == nil || main?.isVisible == false || main?.isMiniaturized == true {
+                        Self.showMainWindow()
+                        NSApp.activate()
+                    }
+                }
             }
         }
+    }
 
-        return false
+    @MainActor
+    static func showMainWindow() {
+        if let main = NSApp.windows.first(where: {
+            $0.identifier?.rawValue.hasPrefix("main") == true
+        }) {
+            if main.isMiniaturized { main.deminiaturize(nil) }
+            main.makeKeyAndOrderFront(nil)
+        } else if let openMain = WindowBridge.openMain {
+            openMain()
+        } else if let windowMenu = NSApp.windowsMenu,
+                  let item = windowMenu.items.first(where: { $0.title == "MxU Slides" }),
+                  let index = windowMenu.items.firstIndex(of: item) {
+            // SwiftUI lists the main Window scene in the Window menu; selecting it opens the scene.
+            windowMenu.performActionForItem(at: index)
+        }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

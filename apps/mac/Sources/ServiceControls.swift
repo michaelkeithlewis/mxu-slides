@@ -70,7 +70,11 @@ final class ServiceControls {
             MainActor.assumeIsolated { self?.tracks.quit() }
         }
 
-        timecode.start()
+        // Open the timecode input after the windows are up: opening an audio device can block
+        // (a microphone-permission prompt, a busy Dante driver) and would hide the whole app.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            MainActor.assumeIsolated { self?.timecode.start() }
+        }
 
         appModel.decks.onFillLanded = { [weak self] id in
             self?.presentationFillDidLand(id)
