@@ -432,6 +432,13 @@ struct AppSettingsView: View {
                 control: AnyView(TimecodeSignalReadout(follower: timecode))
             ))
             rows.append(SettingsRowSpec(
+                id: "timecode.gain",
+                title: "Input gain",
+                caption: "Boosts or cuts the LTC channel before decoding. Only for LTC on an audio channel.",
+                keywords: "timecode ltc gain level trim boost quiet low hot input volume db",
+                control: AnyView(TimecodeGainControl(follower: timecode))
+            ))
+            rows.append(SettingsRowSpec(
                 id: "timecode.offset",
                 title: "Offset",
                 caption: "Moves incoming timecode later or earlier.",

@@ -17,6 +17,13 @@ final class LTCReader: TimecodeReader, @unchecked Sendable {
     private var peak: Float = 0
 
     private var decoder = LTCDecoder(sampleRate: 48_000)
+    private var gain: Float = 1
+    private var scratch: [Float] = []
+
+    func setGain(db: Double) {
+        let linear = Float(pow(10, db / 20))
+        lock.withLock { gain = linear }
+    }
 
     init(deviceUID: String, channel: Int) throws {
         self.deviceUID = deviceUID
@@ -44,9 +51,17 @@ final class LTCReader: TimecodeReader, @unchecked Sendable {
             decoder = LTCDecoder(sampleRate: buffer.format.sampleRate)
         }
         let start = decoder.sampleCount
-        let frames = decoder.decode(UnsafeBufferPointer(start: data[0], count: count))
+        var g = lock.withLock { gain }
+        if scratch.count < count { scratch = [Float](repeating: 0, count: count) }
         var level: Float = 0
-        vDSP_maxmgv(data[0], 1, &level, vDSP_Length(count))
+        let frames: [LTCFrame] = scratch.withUnsafeMutableBufferPointer { out in
+            guard let base = out.baseAddress else { return [] }
+            vDSP_vsmul(data[0], 1, &g, base, 1, vDSP_Length(count))
+            var lo: Float = -1, hi: Float = 1
+            vDSP_vclip(base, 1, &lo, &hi, base, 1, vDSP_Length(count))
+            vDSP_maxmgv(base, 1, &level, vDSP_Length(count))
+            return decoder.decode(UnsafeBufferPointer(start: base, count: count))
+        }
         let rate = decoder.rate ?? .fps30
         let sampleRate = buffer.format.sampleRate
         let new = frames.map {
@@ -85,6 +100,9 @@ final class TimecodeFollower {
         .map { Int32(truncatingIfNeeded: $0) }
     private(set) var channel = UserDefaults.standard.integer(forKey: TimecodeStation.channelKey)
     private(set) var offsetFrames = UserDefaults.standard.integer(forKey: TimecodeStation.offsetKey)
+    static let gainKey = "timecode.gainDB"
+    static let gainRange: ClosedRange<Double> = -24...40
+    private(set) var gainDB = UserDefaults.standard.double(forKey: TimecodeFollower.gainKey)
     private(set) var follows = UserDefaults.standard.object(forKey: TimecodeStation.followKey) as? Bool ?? true
 
     private(set) var playsAudio = UserDefaults.standard.bool(forKey: TimecodeStation.audioKey)
@@ -143,7 +161,9 @@ final class TimecodeFollower {
             return
         case .audio(let deviceUID):
             do {
-                reader = try LTCReader(deviceUID: deviceUID, channel: channel)
+                let ltc = try LTCReader(deviceUID: deviceUID, channel: channel)
+                ltc.setGain(db: gainDB)
+                reader = ltc
                 problem = nil
             } catch {
                 problem = "Not connected"
@@ -208,6 +228,12 @@ final class TimecodeFollower {
         self.channel = channel
         UserDefaults.standard.set(channel, forKey: TimecodeStation.channelKey)
         (reader as? LTCReader)?.setChannel(channel)
+    }
+
+    func setGain(_ db: Double) {
+        gainDB = min(max(db, Self.gainRange.lowerBound), Self.gainRange.upperBound)
+        UserDefaults.standard.set(gainDB, forKey: Self.gainKey)
+        (reader as? LTCReader)?.setGain(db: gainDB)
     }
 
     func setOffset(_ frames: Int) {
@@ -452,6 +478,31 @@ struct TimecodeSignalReadout: View {
                     .frame(width: 90 * CGFloat(AudioLevel.meterFraction(follower.timecodeLevel)))
             }
             .frame(width: 90, height: 5, alignment: .leading)
+        }
+    }
+}
+
+struct TimecodeGainControl: View {
+    let follower: TimecodeFollower
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Slider(
+                value: Binding(get: { follower.gainDB }, set: { follower.setGain(($0 * 2).rounded() / 2) }),
+                in: TimecodeFollower.gainRange
+            )
+            .frame(width: 140)
+            .controlSize(.small)
+            Stepper(value: Binding(get: { follower.gainDB }, set: { follower.setGain($0) }), in: TimecodeFollower.gainRange, step: 1) {
+                Text(String(format: "%@%.1f dB", follower.gainDB > 0 ? "+" : "", follower.gainDB))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(width: 64, alignment: .trailing)
+            }
+            .fixedSize()
+            Button("Reset") { follower.setGain(0) }
+                .controlSize(.small)
+                .disabled(follower.gainDB == 0)
         }
     }
 }
