@@ -46,7 +46,7 @@ import Testing
         "timelinePlayheadTime": ("timelinePlayheadTime", /\btimelinePlayheadTime\b/, []),
 
         "timecodeReading": (
-            "timecodeReading", /\.timecodeReading\b/, ["TimecodeSignalReadout", "TimecodeModuleReadout"]
+            "timecodeReading", /\.timecodeReading\b/, ["TimecodeSignalReadout", "TimecodeModuleReadout", "TimecodeChip"]
         ),
         "timecodeLevel": ("timecodeLevel", /\.timecodeLevel\b/, ["TimecodeSignalReadout"]),
 
