@@ -86,9 +86,10 @@ private func songs(byOrder: Bool, _ items: [(id: String, timeline: PresentationT
     #expect(follow.step(reading, songs: songs)?.itemID == "b")
 }
 
-@Test func inServiceOrderOnlyASongOverAnHourOverlaps() {
+@Test func inServiceOrderASongOverAnHourHandsOffAtTheNextHour() {
     let long: [(id: String, timeline: PresentationTimeline?)] = [("a", timeline("ta", length: 3700)), ("b", timeline("tb"))]
-    #expect(TimecodeFollow.clashes(songs(byOrder: true, long)) == ["a", "b"])
+    #expect(TimecodeFollow.clashes(songs(byOrder: true, long)).isEmpty)
+    #expect(TimecodeFollow.song(containing: 7200 + 1, rate: .fps30, in: songs(byOrder: true, long))?.song.itemID == "b")
     let windows = T.serviceStarts(long, byOrder: true).map { T.Window(id: $0.key, start: $0.value, length: 300 * 30) }
     #expect(T.overlaps(T.Window(id: "a", start: hour, length: T.frames(seconds: 3700)), in: windows).map(\.id) == ["b"])
 }
