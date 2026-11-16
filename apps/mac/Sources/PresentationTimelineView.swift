@@ -183,6 +183,18 @@ struct PresentationTimelineContext {
 
     var lastCue: Double { timeline.map { PresentationTimelines.contentEnd($0.cues) } ?? 0 }
 
+    /// Adds a slide dragged from this song's slide grid as a slide cue at `time`. Returns the new cue's id.
+    func dropSlide(_ dragged: (presentationID: String, slideID: String), at time: Double) -> String? {
+        guard dragged.presentationID == presentation.id else { return nil }
+        let deck = model.presentation(presentation.id) ?? presentation
+        let cues = PresentationTimelines.timeline(for: item.arrangementId, in: deck)?.cues ?? []
+        guard let cue = PresentationTimelines.droppedSlideCue(
+            id: UUID().uuidString, slideId: dragged.slideID, at: time, cues: cues, blocks: blocks)
+        else { return nil }
+        edit("Add Slide Cue") { $0.cues.append(cue) }
+        return cue.id
+    }
+
     func setEnd(_ seconds: Double?) {
         edit(seconds == nil ? "Automatic Song End" : "Song End") { $0.length = seconds }
     }
@@ -355,6 +367,14 @@ struct PresentationTimelineStrip: View {
                     }
                 }
                 .contentShape(Rectangle())
+                .onDrop(of: [.plainText], isTargeted: nil) { _, location in
+                    guard !runOnly,
+                          let payload = NSPasteboard(name: .drag).string(forType: .string),
+                          let dragged = SlideBulkEdit.draggedSlide(in: payload)
+                    else { return false }
+                    return context.dropSlide(
+                        dragged, at: PresentationTimelines.snappedToFrame(time(location.x))) != nil
+                }
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
@@ -1620,14 +1640,8 @@ struct PresentationTimelineLanes: View {
 
     /// A slide dragged from this song's slide grid lands on the slide layer at the drop point.
     private func dropSlide(_ dragged: (presentationID: String, slideID: String), at time: Double) -> Bool {
-        guard dragged.presentationID == context.presentation.id else { return false }
-        let deck = context.model.presentation(context.presentation.id) ?? context.presentation
-        let cues = PresentationTimelines.timeline(for: context.item.arrangementId, in: deck)?.cues ?? []
-        guard let cue = PresentationTimelines.droppedSlideCue(
-            id: UUID().uuidString, slideId: dragged.slideID, at: time, cues: cues, blocks: context.blocks)
-        else { return false }
-        context.edit("Add Slide Cue") { $0.cues.append(cue) }
-        selection = [cue.id]
+        guard let id = context.dropSlide(dragged, at: time) else { return false }
+        selection = [id]
         return true
     }
 
