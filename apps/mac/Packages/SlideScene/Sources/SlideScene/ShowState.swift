@@ -709,7 +709,7 @@ public struct ShowState: Sendable, Equatable {
                 RenderItem(
                     id: "live-media-\(layer)",
                     frame: CGRect(origin: .zero, size: canvasSize),
-                    content: .media(id: media.mediaId, scaleMode: .fill)
+                    content: .media(id: media.mediaId, scaleMode: SlideSceneBuilder.scaleMode(media.scaleMode))
                 ),
                 toLayerID: layer
             )
