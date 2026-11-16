@@ -2,7 +2,7 @@ import PresenterCore
 import SwiftUI
 
 /// Top-bar timecode reader: the incoming timecode, coloured by lock state.
-/// Shown when a timecode input is chosen; View > Show Timecode in Top Bar hides it.
+/// Always shown (dim with no input); View > Show Timecode in Top Bar hides it.
 struct TimecodeChip: View {
     static let visibleKey = "shell.timecodeChipVisible"
 
@@ -22,7 +22,9 @@ struct TimecodeChip: View {
                 Circle()
                     .fill(tint ?? Color.secondary.opacity(0.5))
                     .frame(width: 6, height: 6)
-                Text(reading.label.map { $0.text(dropFrame: reading.rate == .fps2997DropFrame) } ?? "--:--:--:--")
+                Text(follower.hasInput
+                     ? (reading.label.map { $0.text(dropFrame: reading.rate == .fps2997DropFrame) } ?? "--:--:--:--")
+                     : "TC: No input")
                     .font(.system(size: 11, weight: .medium).monospacedDigit())
                     .foregroundStyle(tint == nil ? Color.secondary : Color.primary)
                     .fixedSize()
@@ -31,7 +33,7 @@ struct TimecodeChip: View {
         }
         .buttonStyle(.plain)
         .headerItemBackground(tint: tint)
-        .help("Timecode: \(status.word). Click for timecode settings.")
+        .help(follower.hasInput ? "Timecode: \(status.word). Click for timecode settings." : "No timecode input. Click to choose one.")
         .accessibilityLabel("Timecode")
         .accessibilityValue(status.word)
     }

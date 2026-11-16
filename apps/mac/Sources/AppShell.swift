@@ -492,7 +492,7 @@ struct ShellView: View {
                         BackupStatusChip(follow: FollowController.shared)
                         Spacer().frame(width: 4)
                     }
-                    if timecodeChipVisible, controls.timecode.hasInput {
+                    if timecodeChipVisible {
                         TimecodeChip(follower: controls.timecode)
                         Spacer().frame(width: 8)
                     }
