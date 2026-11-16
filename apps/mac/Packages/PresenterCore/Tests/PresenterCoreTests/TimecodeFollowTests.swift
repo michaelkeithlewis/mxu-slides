@@ -197,6 +197,23 @@ private func ≈ (lhs: TimecodeFollow.Command?, rhs: TimecodeFollow.Command) -> 
         #expect(PresentationTimelines.roomToNext(a, in: [b, c]) == 3000)
     }
 
+    @Test func aDroppedSlideTakesTheNextPassOfARepeatedSection() {
+        let blocks = [
+            TimelinePlayedBlock(sectionId: "v1", slideIds: ["v1a"]),
+            TimelinePlayedBlock(sectionId: "ch", slideIds: ["cha", "chb"]),
+            TimelinePlayedBlock(sectionId: "v2", slideIds: ["v2a"]),
+            TimelinePlayedBlock(sectionId: "ch", slideIds: ["cha", "chb"]),
+        ]
+        let v2 = PresentationTimelines.slideCue(
+            id: "v2", at: 60, anchor: TimelineSlideAnchor(sectionId: "v2", sectionOccurrence: 0, slideId: "v2a"))
+        let second = PresentationTimelines.droppedSlideCue(id: "x", slideId: "cha", at: 75, cues: [v2], blocks: blocks)
+        #expect(second?.sectionOccurrence == 1)
+        #expect(second?.at == 75)
+        let first = PresentationTimelines.droppedSlideCue(id: "y", slideId: "cha", at: 20, cues: [v2], blocks: blocks)
+        #expect(first?.sectionOccurrence == 0)
+        #expect(PresentationTimelines.droppedSlideCue(id: "z", slideId: "nope", at: 5, cues: [], blocks: blocks) == nil)
+    }
+
     @Test func clashesFlagSongsSharingAStart() {
         let defaultStart = [
             TimecodeFollow.Song(itemID: "a", startFrames: 0, length: 200),

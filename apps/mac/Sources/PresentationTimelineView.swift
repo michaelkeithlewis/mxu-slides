@@ -988,7 +988,7 @@ struct PresentationTimelineLanes: View {
                     .help(count > 1 ? "Remove these cues from the timeline (⌫)" : "Remove from the timeline (⌫)")
                 }
             } else {
-                Text(runOnly ? "Timeline" : "Drag from the library onto the layers, or + on a layer adds at the playhead")
+                Text(runOnly ? "Timeline" : "Drag slides or library items onto the layers, or + on a layer adds at the playhead")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
@@ -1618,6 +1618,19 @@ struct PresentationTimelineLanes: View {
         DiagnosticsStore.shared.note("timeline.rippleDelete", detail: "\(range.lowerBound)–\(range.upperBound)")
     }
 
+    /// A slide dragged from this song's slide grid lands on the slide layer at the drop point.
+    private func dropSlide(_ dragged: (presentationID: String, slideID: String), at time: Double) -> Bool {
+        guard dragged.presentationID == context.presentation.id else { return false }
+        let deck = context.model.presentation(context.presentation.id) ?? context.presentation
+        let cues = PresentationTimelines.timeline(for: context.item.arrangementId, in: deck)?.cues ?? []
+        guard let cue = PresentationTimelines.droppedSlideCue(
+            id: UUID().uuidString, slideId: dragged.slideID, at: time, cues: cues, blocks: context.blocks)
+        else { return false }
+        context.edit("Add Slide Cue") { $0.cues.append(cue) }
+        selection = [cue.id]
+        return true
+    }
+
     private func drop(_ payloads: [String], at time: Double, track: TrackRow? = nil) -> Bool {
         DiagnosticsStore.shared.note("timeline.drop.offered", detail: payloads.first ?? "none")
         guard !runOnly, let id = payloads.first else { return false }
@@ -1629,6 +1642,9 @@ struct PresentationTimelineLanes: View {
                     seconds: context.model.audio(stem.audioId)?.durationSeconds, channelId: stem.channelId)
             }, at: PresentationTimelines.snappedToFrame(time), set: set.id)
             return true
+        }
+        if let dragged = SlideBulkEdit.draggedSlide(in: id) {
+            return dropSlide(dragged, at: PresentationTimelines.snappedToFrame(time))
         }
         guard let entry = context.model.indexEntry(id) else { return false }
         let at = PresentationTimelines.snappedToFrame(time)

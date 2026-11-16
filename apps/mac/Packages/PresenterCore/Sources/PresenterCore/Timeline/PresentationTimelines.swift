@@ -99,6 +99,22 @@ public enum PresentationTimelines {
         return nil
     }
 
+    /// A slide cue for a slide dropped onto the timeline at `at`. When the slide plays more than once in the
+    /// arrangement, it takes the first play after the slide cue before `at`, so a repeated chorus lands on the
+    /// right pass.
+    public static func droppedSlideCue(
+        id: String, slideId: String, at: Double, cues: [TimelineCue], blocks: [TimelinePlayedBlock]
+    ) -> TimelineCue? {
+        let order = blocks.flatMap(\.slideIds)
+        let before = cues.filter { $0.kind == .slide && $0.at <= at }.max { $0.at < $1.at }
+        let after = before.flatMap { occurrence(of: $0, in: blocks) }.map { $0 + 1 } ?? 0
+        guard let index = order[min(after, order.count)...].firstIndex(of: slideId)
+                ?? order.firstIndex(of: slideId),
+              let anchor = anchor(occurrence: index, in: blocks)
+        else { return nil }
+        return slideCue(id: id, at: at, anchor: anchor)
+    }
+
     public static func slideCue(id: String, at: Double, anchor: TimelineSlideAnchor) -> TimelineCue {
         TimelineCue(
             id: id, lane: TimelineLane.slide.rawValue, at: at, sectionId: anchor.sectionId,
