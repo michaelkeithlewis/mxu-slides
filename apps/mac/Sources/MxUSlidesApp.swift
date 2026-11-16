@@ -63,9 +63,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         Self.showMainWindow()
                         NSApp.activate()
                     }
+                    Self.keepMainWindowOffOutputScreens()
                 }
             }
         }
+    }
+
+    /// The main window must never sit on a screen an output owns (e.g. the NewTek NDI virtual
+    /// display), where it is hidden behind the full-screen output window. Move it to the menu-bar screen.
+    @MainActor
+    static func keepMainWindowOffOutputScreens() {
+        guard let main = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("main") == true }),
+              let home = NSScreen.screens.first else { return }
+        let screen = main.screen ?? NSScreen.screens.first { $0.frame.intersects(main.frame) }
+        let covered = NSApp.windows.contains { other in
+            other !== main && other.isVisible && other.level.rawValue > NSWindow.Level.normal.rawValue
+                && other.frame.width >= 640 && other.screen != nil && other.screen == screen
+        }
+        guard screen != home, covered || screen == nil else { return }
+        let area = home.visibleFrame
+        let size = NSSize(width: min(main.frame.width, area.width), height: min(main.frame.height, area.height))
+        main.setFrame(NSRect(x: area.midX - size.width / 2, y: area.midY - size.height / 2,
+                             width: size.width, height: size.height), display: true)
+        main.makeKeyAndOrderFront(nil)
     }
 
     @MainActor
@@ -75,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }) {
             if main.isMiniaturized { main.deminiaturize(nil) }
             main.makeKeyAndOrderFront(nil)
+            keepMainWindowOffOutputScreens()
         } else if let openMain = WindowBridge.openMain {
             openMain()
         } else if let windowMenu = NSApp.windowsMenu,
