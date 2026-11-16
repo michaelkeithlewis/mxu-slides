@@ -204,6 +204,7 @@ struct ViewCommands: Commands {
     @Environment(\.openWindow) private var openWindow
 
     @AppStorage(PresentLayoutController.lockedKey) private var runOnly = false
+    @AppStorage(TimecodeChip.visibleKey) private var timecodeChipVisible = true
 
     var body: some Commands {
         CommandGroup(before: .sidebar) {
@@ -230,6 +231,8 @@ struct ViewCommands: Commands {
             }
             .keyboardShortcut(command: .toggleSidebar)
 
+            Toggle("Show Timecode in Top Bar", isOn: $timecodeChipVisible)
+
             Button(rightRailHidden ? "Show Right Panels" : "Hide Right Panels") {
                 rightRailHidden.toggle()
             }
@@ -245,6 +248,7 @@ struct ViewCommands: Commands {
 }
 
 struct ShellView: View {
+    @AppStorage(TimecodeChip.visibleKey) private var timecodeChipVisible = true
     @Bindable var model: AppModel
     let render: RenderContext?
     let controls: ServiceControls?
@@ -487,6 +491,10 @@ struct ShellView: View {
                     if FollowController.shared.pairing == nil, !FollowController.shared.backups.isEmpty {
                         BackupStatusChip(follow: FollowController.shared)
                         Spacer().frame(width: 4)
+                    }
+                    if timecodeChipVisible, controls.timecode.hasInput {
+                        TimecodeChip(follower: controls.timecode)
+                        Spacer().frame(width: 8)
                     }
                     BroadcastStatusChip(controls: controls)
 
