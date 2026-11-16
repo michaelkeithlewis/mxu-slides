@@ -142,18 +142,65 @@ public struct TimecodeFollow: Sendable {
 
         public var tail: Double
 
-        public init(itemID: String, startFrames: Int, length: Double, tail: Double = 0) {
+        /// True when the song has no end of its own, so it runs on to the next song's start.
+        public var open: Bool
+
+        /// Seconds from the start to the song's last cue.
+        public var lastCue: Double
+
+        public init(
+            itemID: String, startFrames: Int, length: Double, tail: Double = 0,
+            open: Bool = false, lastCue: Double? = nil
+        ) {
             self.itemID = itemID
             self.startFrames = startFrames
             self.length = length
             self.tail = tail
+            self.open = open
+            self.lastCue = lastCue ?? length
         }
 
         public init(itemID: String, timeline: PresentationTimeline, start: Int? = nil) {
             self.init(
                 itemID: itemID, startFrames: start ?? timeline.timecodeStart,
-                length: PresentationTimelines.length(timeline), tail: timeline.length == nil ? 1 : 0)
+                length: PresentationTimelines.length(timeline), tail: timeline.length == nil ? 1 : 0,
+                open: timeline.length == nil, lastCue: PresentationTimelines.contentEnd(timeline.cues))
         }
+
+        public var startSeconds: Double { Double(startFrames) / Double(PresentationTimelines.framesPerSecond) }
+    }
+
+    /// How far past its last cue an open song reaches to meet the next song's start.
+    public static let handoffReach = 30.0
+
+    /// Ends each open song at the next song's start when that start is within `handoffReach` of
+    /// its last cue, so the song holds its last slide until the next one takes over.
+    public static func handedOff(_ songs: [Song]) -> [Song] {
+        songs.map { song in
+            guard song.open,
+                  let next = songs.map(\.startFrames).filter({ $0 > song.startFrames }).min()
+            else { return song }
+            let gap = Double(next - song.startFrames) / Double(PresentationTimelines.framesPerSecond)
+            guard gap <= song.length + handoffReach else { return song }
+            var out = song
+            out.length = max(gap, 0)
+            out.tail = 0
+            return out
+        }
+    }
+
+    /// Earlier song id -> later song id, where the later song starts before the earlier song's last cue.
+    /// The later song takes over at its start, so the earlier song's remaining cues never fire.
+    public static func cutoffs(_ songs: [Song]) -> [String: String] {
+        var out: [String: String] = [:]
+        for song in songs {
+            let end = song.startFrames + PresentationTimelines.frames(seconds: song.lastCue)
+            if let next = songs.filter({ $0.startFrames > song.startFrames && $0.startFrames < end })
+                .min(by: { $0.startFrames < $1.startFrames }) {
+                out[song.itemID] = next.itemID
+            }
+        }
+        return out
     }
 
     public enum Command: Equatable, Sendable {
@@ -188,9 +235,15 @@ public struct TimecodeFollow: Sendable {
     public static func song(
         containing seconds: Double, rate: TimecodeRate, in songs: [Song]
     ) -> (song: Song, position: Double)? {
-        let placed = songs.map { ($0, seconds - rate.seconds(rate.label(startFrames: $0.startFrames))) }
-        return placed.first { $0.1 >= 0 && $0.1 < $0.0.length }
-            ?? placed.first { $0.1 >= 0 && $0.1 < $0.0.length + $0.0.tail }
+        let placed = handedOff(songs).map { ($0, seconds - rate.seconds(rate.label(startFrames: $0.startFrames))) }
+
+        // The latest start wins, so a song that starts inside another takes over from its start.
+        // Songs that share a start go to the earlier one in the service.
+        let latest: ([(Song, Double)]) -> (Song, Double)? = { candidates in
+            candidates.max { $0.0.startFrames < $1.0.startFrames }
+        }
+        return latest(placed.filter { $0.1 >= 0 && $0.1 < $0.0.length })
+            ?? latest(placed.filter { $0.1 >= 0 && $0.1 < $0.0.length + $0.0.tail })
     }
 
     public mutating func step(_ reading: TimecodeClock.Reading, songs: [Song]) -> Command? {
@@ -211,12 +264,10 @@ public struct TimecodeFollow: Sendable {
         return Self.enter(id, at: position)
     }
 
+    /// Songs that share a start. Timecode can't tell these apart; every other overlap hands off at the later start.
     public static func clashes(_ songs: [Song]) -> Set<String> {
-        let windows = songs.map {
-            PresentationTimelines.Window(
-                id: $0.itemID, start: $0.startFrames, length: PresentationTimelines.frames(seconds: $0.length + $0.tail))
-        }
-        return Set(windows.filter { !PresentationTimelines.overlaps($0, in: windows).isEmpty }.map(\.id))
+        let shared = Dictionary(grouping: songs, by: \.startFrames).values.filter { $0.count > 1 }
+        return Set(shared.flatMap { $0.map(\.itemID) })
     }
 
     public struct CueRow: Equatable, Sendable {

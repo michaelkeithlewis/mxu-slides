@@ -142,8 +142,49 @@ struct PresentationTimelineContext {
         timeline.map {
             PresentationTimelines.Window(
                 id: item.id, start: start ?? $0.timecodeStart,
-                length: PresentationTimelines.frames(seconds: PresentationTimelines.length($0)))
+                length: PresentationTimelines.frames(seconds: PresentationTimelines.length($0)),
+                lastCue: PresentationTimelines.frames(seconds: PresentationTimelines.contentEnd($0.cues)))
         }
+    }
+
+    /// The other items in this service that play from timecode, with their last cue.
+    func followedWindows() -> [(window: PresentationTimelines.Window, name: String)] {
+        guard let service = try? model.service(serviceID) else { return [] }
+        let starts = TimecodeFollower.starts(model, service: service)
+        return model.runOfShow(service).compactMap { other in
+            guard other.itemKind == .presentation, other.id != item.id,
+                  let deck = model.presentation(other.refId),
+                  let timeline = PresentationTimelines.timeline(for: other.arrangementId, in: deck),
+                  timeline.timecodeEnabled
+            else { return nil }
+            return (
+                PresentationTimelines.Window(
+                    id: other.id, start: starts[other.id] ?? timeline.timecodeStart,
+                    length: PresentationTimelines.frames(seconds: PresentationTimelines.length(timeline)),
+                    lastCue: PresentationTimelines.frames(seconds: PresentationTimelines.contentEnd(timeline.cues))),
+                other.name)
+        }
+    }
+
+    /// Items whose timecode really collides with this one: a shared start, or a start that cuts off cues.
+    func conflicts() -> [(window: PresentationTimelines.Window, name: String)] {
+        guard let mine = window, timeline?.timecodeEnabled == true else { return [] }
+        let others = followedWindows()
+        let hits = Set(PresentationTimelines.conflicts(mine, in: others.map(\.window)).map(\.id))
+        return others.filter { hits.contains($0.window.id) }
+    }
+
+    /// Seconds from this song's start to the next timecode song's start, or nil if nothing follows it.
+    var roomToNext: Double? {
+        guard let mine = window else { return nil }
+        return PresentationTimelines.roomToNext(mine, in: followedWindows().map(\.window))
+            .map { Double($0) / Double(PresentationTimelines.framesPerSecond) }
+    }
+
+    var lastCue: Double { timeline.map { PresentationTimelines.contentEnd($0.cues) } ?? 0 }
+
+    func setEnd(_ seconds: Double?) {
+        edit(seconds == nil ? "Automatic Song End" : "Song End") { $0.length = seconds }
     }
 
     func suggestedStart(length: Double) -> Int {
@@ -178,9 +219,7 @@ struct PresentationTimelineStrip: View {
         let length = max(timeline.map(PresentationTimelines.length) ?? 0, 1)
         let shown = context.shownLength
         let start = context.start ?? timeline?.timecodeStart ?? 0
-        let clashes = context.window.map { mine in
-            context.windows().filter { mine.overlaps($0.window) }
-        } ?? []
+        let clashes = context.conflicts()
         let expanded = PresentationTimelineCards.shared.expanded.contains(context.item.id)
         let recording = context.isCurrent && clock.recording
         HStack(spacing: 8) {
@@ -250,7 +289,7 @@ struct PresentationTimelineStrip: View {
             .accessibilityLabel("Timecode Start")
             .help(clashes.isEmpty
                 ? "Timecode start"
-                : "This start overlaps \(clashes.map(\.name).joined(separator: ", "))")
+                : "This song's timecode collides with \(clashes.map(\.name).joined(separator: ", ")). A shared start can't be told apart, and a start before the last cue cuts the earlier song off.")
             .popover(isPresented: $startShown, arrowEdge: .bottom) {
                 PresentationTimelineStartPopover(context: context)
             }
@@ -302,6 +341,9 @@ struct PresentationTimelineStrip: View {
                             if let transition = context.transition {
                                 SongTransitionMarker(plan: transition.plan, nextName: transition.nextName, x: x)
                             }
+                        }
+                        .overlay(alignment: .topLeading) {
+                            PresentationTimelineEndHandle(context: context, pointsPerSecond: pps, x: x)
                         }
                     PresentationTimelineStepsRow(context: context, x: x)
                         .frame(width: contentWidth, height: 12, alignment: .leading)
@@ -522,7 +564,9 @@ struct PresentationTimelineStartPopover: View {
         let mine = PresentationTimelines.Window(
             id: context.item.id, start: ordered ?? typed ?? context.timeline?.timecodeStart ?? 0,
             length: PresentationTimelines.frames(seconds: length))
-        let clashes = others.filter { mine.overlaps($0.window) }
+        let clashes = context.followedWindows().filter {
+            !PresentationTimelines.conflicts(mine, in: [$0.window]).isEmpty
+        }
         VStack(alignment: .leading, spacing: 10) {
             Text("Timecode Start")
                 .font(.headline)
@@ -559,7 +603,7 @@ struct PresentationTimelineStartPopover: View {
                 .disabled(runOnly)
             if !clashes.isEmpty {
                 Label(
-                    "Overlaps " + clashes.map {
+                    "Collides with " + clashes.map {
                         "\($0.name) (\(PresentationTimelines.timecode(frames: $0.window.start)))"
                     }.joined(separator: ", "),
                     systemImage: "exclamationmark.triangle.fill")
@@ -583,6 +627,11 @@ struct PresentationTimelineStartPopover: View {
         }
         .padding(16)
         .frame(width: 320, alignment: .leading)
+        .safeAreaInset(edge: .bottom) {
+            PresentationTimelineEndControls(context: context)
+                .padding([.horizontal, .bottom], 16)
+                .frame(width: 320, alignment: .leading)
+        }
         .onAppear {
             text = PresentationTimelines.timecode(
                 frames: context.timeline?.timecodeStart ?? context.suggestedStart(length: 0))
@@ -2317,5 +2366,93 @@ struct SongTransitionChip: View {
         .background(Color.accentColor.opacity(0.1), in: Capsule())
         .frame(maxWidth: 340)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// The song's end marker on the sections bar. Dragging it moves only the end (cues stay put), and it stops at
+/// the last cue and at the next timecode song's start. Double-click returns it to automatic.
+struct PresentationTimelineEndHandle: View {
+    let context: PresentationTimelineContext
+    let pointsPerSecond: Double
+    let x: (Double) -> CGFloat
+    @Environment(\.runOnly) private var runOnly
+    @State private var dragFrom: Double?
+    @State private var preview: Double?
+
+    var body: some View {
+        if let timeline = context.timeline, timeline.timecodeEnabled, !runOnly {
+            let end = preview ?? PresentationTimelines.length(timeline)
+            let automatic = timeline.length == nil && preview == nil
+            let atNext = context.roomToNext.map { abs($0 - end) < 0.05 } ?? false
+            Rectangle()
+                .fill(automatic ? Color.secondary.opacity(0.6) : atNext ? Color.green : Color.accentColor)
+                .frame(width: 3, height: 24)
+                .frame(width: 13, height: 24)
+                .contentShape(Rectangle())
+                .offset(x: x(end) - 6.5)
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 1)
+                        .onChanged { value in
+                            let from = dragFrom ?? end
+                            dragFrom = from
+                            preview = PresentationTimelines.clampedEnd(
+                                from + Double(value.translation.width) / pointsPerSecond,
+                                lastCue: context.lastCue, roomToNext: context.roomToNext)
+                        }
+                        .onEnded { _ in
+                            if let preview { context.setEnd(preview) }
+                            dragFrom = nil
+                            preview = nil
+                        })
+                .onTapGesture(count: 2) { context.setEnd(nil) }
+                .onHover { inside in
+                    if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                }
+                .help(automatic
+                    ? "Song end: automatic. Drag to set it. It stops at the next song's start."
+                    : "Song end: \(TransitionEdit.label(seconds: end)). Drag to move it, double-click for automatic.")
+                .accessibilityLabel("Song End")
+        }
+    }
+}
+
+/// End controls in the timecode start popover.
+struct PresentationTimelineEndControls: View {
+    let context: PresentationTimelineContext
+    @Environment(\.runOnly) private var runOnly
+
+    var body: some View {
+        if let timeline = context.timeline, timeline.timecodeEnabled {
+            let start = context.window?.start ?? timeline.timecodeStart
+            let end = PresentationTimelines.length(timeline)
+            let room = context.roomToNext
+            VStack(alignment: .leading, spacing: 8) {
+                Divider()
+                Text("Song End")
+                    .font(.headline)
+                HStack(spacing: 6) {
+                    Text(PresentationTimelines.timecode(frames: start + PresentationTimelines.frames(seconds: end)))
+                        .font(.body.monospacedDigit())
+                    Text(timeline.length == nil ? "· automatic" : "· set")
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 10) {
+                    Button("End at next start") { if let room { context.setEnd(room) } }
+                        .disabled(room == nil || timeline.length == room)
+                        .help(room.map {
+                            "End at \(PresentationTimelines.timecode(frames: start + PresentationTimelines.frames(seconds: $0)))"
+                        } ?? "No song plays from timecode after this one")
+                    Button("Automatic") { context.setEnd(nil) }
+                        .buttonStyle(.link)
+                        .controlSize(.small)
+                        .disabled(timeline.length == nil)
+                }
+                .disabled(runOnly)
+                Text("Drag the end marker on the timeline to move the end. The cues don't move. The end stops at the next song's start, and the next song takes over at its start either way. Automatic holds the last slide until the next song starts, if that's within 30 s of the last cue.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }

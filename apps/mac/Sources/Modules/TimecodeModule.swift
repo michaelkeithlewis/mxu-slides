@@ -116,6 +116,8 @@ struct TimecodeModule: View {
             row.timeline.flatMap { $0.timecodeEnabled ? TimecodeFollow.Song(itemID: row.item.id, timeline: $0, start: row.start) : nil }
         }
         let clashes = TimecodeFollow.clashes(songs)
+        let names = Dictionary(rows.map { ($0.item.id, $0.item.name) }, uniquingKeysWith: { first, _ in first })
+        let cutoffs = TimecodeFollow.cutoffs(songs).compactMapValues { names[$0] }
 
         let cues = Dictionary(uniqueKeysWithValues: rows.compactMap { row -> (String, [TimecodeFollow.CueRow])? in
             guard let deck = row.deck, let timeline = row.timeline, timeline.timecodeEnabled else { return nil }
@@ -146,7 +148,9 @@ struct TimecodeModule: View {
                             .padding(.leading, TimecodeGrid.lead + TimecodeGrid.gap)
                             .padding(.top, 6)
                     } else {
-                        songRow(row, cues: cues[row.item.id] ?? [], clashes: clashes.contains(row.item.id))
+                        songRow(
+                            row, cues: cues[row.item.id] ?? [], clashes: clashes.contains(row.item.id),
+                            cutBy: cutoffs[row.item.id])
                     }
                 }
             }
@@ -154,7 +158,7 @@ struct TimecodeModule: View {
     }
 
     @ViewBuilder
-    private func songRow(_ row: Row, cues: [TimecodeFollow.CueRow], clashes: Bool) -> some View {
+    private func songRow(_ row: Row, cues: [TimecodeFollow.CueRow], clashes: Bool, cutBy: String?) -> some View {
         let current = controls.timeline.itemID == row.item.id
         let on = row.timeline?.timecodeEnabled == true
         let open = !cues.isEmpty && isOpen(row.item.id)
@@ -209,6 +213,11 @@ struct TimecodeModule: View {
                     .font(.caption2)
                     .foregroundStyle(.orange)
                     .help("Shares its timecode start with another item")
+            } else if let cutBy {
+                Image(systemName: "scissors")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .help("\(cutBy) starts before this song's last cue and takes over there, so the cues after that point don't fire")
             }
         }
         .padding(.vertical, 2)

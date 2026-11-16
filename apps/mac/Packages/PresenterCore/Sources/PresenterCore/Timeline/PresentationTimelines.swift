@@ -420,10 +420,14 @@ public enum PresentationTimelines {
         public var start: Int
         public var length: Int
 
-        public init(id: String, start: Int, length: Int) {
+        /// Frames from the start to the last cue.
+        public var lastCue: Int
+
+        public init(id: String, start: Int, length: Int, lastCue: Int? = nil) {
             self.id = id
             self.start = start
             self.length = max(length, 1)
+            self.lastCue = lastCue ?? self.length
         }
 
         public var end: Int { start + length }
@@ -435,6 +439,30 @@ public enum PresentationTimelines {
 
     public static func overlaps(_ window: Window, in others: [Window]) -> [Window] {
         others.filter { $0.id != window.id && window.overlaps($0) }
+    }
+
+    /// Windows that really collide with this one under timecode handoff: they share its start, or one
+    /// starts before the other's last cue (which cuts those cues off). Plain overlaps past the last cue are fine,
+    /// because the later start takes over.
+    public static func conflicts(_ window: Window, in others: [Window]) -> [Window] {
+        others.filter { other in
+            guard other.id != window.id else { return false }
+            if other.start == window.start { return true }
+            let (first, second) = other.start < window.start ? (other, window) : (window, other)
+            return second.start < first.start + first.lastCue
+        }
+    }
+
+    /// Frames from this window's start to the next later start among `others`, or nil if it's the last.
+    public static func roomToNext(_ window: Window, in others: [Window]) -> Int? {
+        others.filter { $0.id != window.id && $0.start > window.start }.map { $0.start - window.start }.min()
+    }
+
+    /// A dragged song end, in seconds, kept between the last cue and the next song's start.
+    public static func clampedEnd(_ seconds: Double, lastCue: Double, roomToNext: Double?) -> Double {
+        var end = max(seconds, max(lastCue, 1))
+        if let room = roomToNext { end = min(end, room) }
+        return end
     }
 
     public static func serviceStarts(

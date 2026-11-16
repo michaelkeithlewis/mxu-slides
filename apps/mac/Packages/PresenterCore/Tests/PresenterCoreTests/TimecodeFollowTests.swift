@@ -127,7 +127,8 @@ private func ≈ (lhs: TimecodeFollow.Command?, rhs: TimecodeFollow.Command) -> 
         #expect(TimecodeFollow.song(containing: 0, rate: .fps30, in: songs) == nil)
 
         let overlapping = [songs[1], TimecodeFollow.Song(itemID: "x", startFrames: 216_000 + 300, length: 60)]
-        #expect(TimecodeFollow.song(containing: 7200 + 20, rate: .fps30, in: overlapping)?.song.itemID == "b")
+        #expect(TimecodeFollow.song(containing: 7200 + 5, rate: .fps30, in: overlapping)?.song.itemID == "b")
+        #expect(TimecodeFollow.song(containing: 7200 + 20, rate: .fps30, in: overlapping)?.song.itemID == "x")
 
         let start = TimecodeRate.fps2997.seconds(TimecodeLabel(hours: 2, minutes: 0, seconds: 0, frames: 0))
         let position = TimecodeFollow.song(containing: start + 60, rate: .fps2997, in: songs)?.position
@@ -150,6 +151,50 @@ private func ≈ (lhs: TimecodeFollow.Command?, rhs: TimecodeFollow.Command) -> 
         var fixed = timeline
         fixed.length = 30
         #expect(TimecodeFollow.Song(itemID: "a", timeline: fixed).tail == 0)
+    }
+
+    @Test func theLaterStartTakesOverEvenInsideAFixedLength() {
+        let first = TimecodeFollow.Song(itemID: "a", startFrames: 108_000, length: 300, lastCue: 200)
+        let second = TimecodeFollow.Song(itemID: "b", startFrames: 108_000 + 30 * 240, length: 300)
+        #expect(TimecodeFollow.song(containing: 3600 + 239, rate: .fps30, in: [first, second])?.song.itemID == "a")
+        let handoff = TimecodeFollow.song(containing: 3600 + 241, rate: .fps30, in: [first, second])
+        #expect(handoff?.song.itemID == "b")
+        #expect(abs((handoff?.position ?? 0) - 1) < 1e-9)
+        #expect(TimecodeFollow.clashes([first, second]).isEmpty)
+        #expect(TimecodeFollow.cutoffs([first, second]).isEmpty)
+    }
+
+    @Test func anOpenSongHoldsUntilTheNextStartWithinReach() {
+        let timeline = PresentationTimeline(
+            id: "t", timecodeEnabled: true, timecodeStart: 108_000,
+            cues: [TimelineCue(id: "s", lane: "slide", at: 30, slideId: "x")])
+        let song = TimecodeFollow.Song(itemID: "a", timeline: timeline)
+        #expect(song.open)
+        let near = TimecodeFollow.Song(itemID: "b", startFrames: 108_000 + 30 * 50, length: 60)
+        #expect(TimecodeFollow.song(containing: 3600 + 45, rate: .fps30, in: [song, near])?.song.itemID == "a")
+        #expect(TimecodeFollow.song(containing: 3600 + 50, rate: .fps30, in: [song, near])?.song.itemID == "b")
+
+        let far = TimecodeFollow.Song(itemID: "c", startFrames: 108_000 + 30 * 600, length: 60)
+        #expect(TimecodeFollow.song(containing: 3600 + 45, rate: .fps30, in: [song, far]) == nil)
+    }
+
+    @Test func cutoffsNameTheSongThatStartsBeforeTheLastCue() {
+        let first = TimecodeFollow.Song(itemID: "ogiwu", startFrames: 0, length: 433, lastCue: 398)
+        let refrain = TimecodeFollow.Song(itemID: "refrain", startFrames: 30 * 356, length: 300, lastCue: 117)
+        let ocayf = TimecodeFollow.Song(itemID: "ocayf", startFrames: 30 * 595, length: 300, lastCue: 151)
+        #expect(TimecodeFollow.cutoffs([first, refrain, ocayf]) == ["ogiwu": "refrain"])
+    }
+
+    @Test func endClampStopsAtTheLastCueAndTheNextStart() {
+        #expect(PresentationTimelines.clampedEnd(500, lastCue: 200, roomToNext: 240) == 240)
+        #expect(PresentationTimelines.clampedEnd(100, lastCue: 200, roomToNext: 240) == 200)
+        #expect(PresentationTimelines.clampedEnd(220, lastCue: 200, roomToNext: nil) == 220)
+        let a = PresentationTimelines.Window(id: "a", start: 0, length: 9000, lastCue: 6000)
+        let b = PresentationTimelines.Window(id: "b", start: 7200, length: 9000, lastCue: 3000)
+        let c = PresentationTimelines.Window(id: "c", start: 3000, length: 900)
+        #expect(PresentationTimelines.conflicts(a, in: [b]).isEmpty)
+        #expect(PresentationTimelines.conflicts(a, in: [c]).map(\.id) == ["c"])
+        #expect(PresentationTimelines.roomToNext(a, in: [b, c]) == 3000)
     }
 
     @Test func clashesFlagSongsSharingAStart() {
